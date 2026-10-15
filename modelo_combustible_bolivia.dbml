@@ -1,0 +1,295 @@
+// =====================================================
+// CONTROL DE COMBUSTIBLE SUBVENCIONADO - BOLIVIA
+// 14 tablas
+// =====================================================
+
+// ---------- LISTAS DE VALORES (ENUMS) ----------
+
+Enum tipo_combustible {
+  GASOLINA
+  DIESEL
+  GAS
+}
+
+Enum dedo_huella {
+  PULGAR_DERECHO
+  INDICE_DERECHO
+  MEDIO_DERECHO
+  PULGAR_IZQUIERDO
+  INDICE_IZQUIERDO
+  MEDIO_IZQUIERDO
+}
+
+Enum estado_subvencion {
+  VIGENTE
+  AGOTADA
+  SUSPENDIDA
+  BAJA
+}
+
+Enum tipo_precio {
+  SUBVENCIONADO
+  INTERNACIONAL
+}
+
+Enum tipo_carga {
+  VEHICULO
+  BIDON
+}
+
+Enum estado_transaccion {
+  APROBADA
+  RECHAZADA
+  ANULADA
+}
+
+Enum motivo_precio_internacional {
+  CUPO_AGOTADO
+  NO_ES_TITULAR
+  VEHICULO_SIN_SUBVENCION
+  LIMITE_VEHICULOS_EXCEDIDO
+  CARGA_EN_BIDON
+}
+
+Enum tipo_alerta {
+  UBICACION_IMPOSIBLE
+  FRECUENCIA_EXCEDIDA
+  EXCEDE_CAPACIDAD_TANQUE
+  USO_BIDON_SOSPECHOSO
+}
+
+Enum estado_alerta {
+  ABIERTA
+  EN_REVISION
+  CERRADA
+}
+
+Enum resultado_inspeccion {
+  CONFORME
+  OBSERVADA
+  PRECINTADA
+}
+
+// ---------- 1. PERSONAS ----------
+
+Table persona {
+  id_persona integer [pk, increment]
+  ci varchar(20) [not null, unique, note: 'Cedula de identidad']
+  nombres varchar(100) [not null]
+  apellidos varchar(100) [not null]
+  fecha_nacimiento date
+  telefono varchar(20)
+  correo varchar(120)
+  activa boolean [not null, default: true]
+  fecha_registro timestamp [not null, default: `now()`]
+}
+
+Table huella_digital {
+  id_huella integer [pk, increment]
+  id_persona integer [not null, ref: > persona.id_persona]
+  dedo dedo_huella [not null]
+  plantilla_cifrada bytea [not null, note: 'Plantilla biometrica cifrada. Nunca la imagen de la huella.']
+  fecha_registro timestamp [not null, default: `now()`]
+  activa boolean [not null, default: true]
+
+  indexes {
+    (id_persona, dedo) [unique]
+  }
+}
+
+// ---------- 2. VEHICULOS ----------
+
+Table modelo_vehiculo {
+  id_modelo integer [pk, increment]
+  marca varchar(60) [not null, note: 'Ej: Toyota, Suzuki, Nissan']
+  nombre varchar(80) [not null, note: 'Ej: Corolla, Vitara, Hilux']
+  anio_modelo integer [not null]
+  cilindrada_cc integer [not null, note: 'Ej: 1300, 1500, 2000']
+  tipo_vehiculo varchar(30) [note: 'AUTOMOVIL, CAMIONETA, MOTO, CAMION...']
+  tipo_combustible tipo_combustible [not null]
+  capacidad_tanque_litros decimal(7,2) [not null, note: 'Maximo que le entra al tanque']
+  consumo_km_por_litro decimal(6,2) [note: 'Consumo teorico']
+  autonomia_horas_tanque_lleno decimal(7,2) [note: 'Horas teoricas en que se acaba un tanque lleno']
+
+  indexes {
+    (marca, nombre, anio_modelo, cilindrada_cc) [unique]
+  }
+}
+
+Table vehiculo {
+  id_vehiculo integer [pk, increment]
+  id_modelo integer [not null, ref: > modelo_vehiculo.id_modelo]
+  id_persona integer [not null, ref: > persona.id_persona, note: 'Propietario segun el RUAT']
+  placa varchar(10) [not null, unique]
+  codigo_rfid varchar(64) [not null, unique, note: 'Codigo del tag RFID pegado al vehiculo']
+  nro_chasis varchar(30) [unique]
+  color varchar(30)
+  activo boolean [not null, default: true]
+}
+
+// ---------- 3. REGLAS Y PRECIOS ----------
+
+Table regla_negocio {
+  id_regla integer [pk, increment]
+  codigo varchar(50) [not null, note: 'Ej: MAX_VEHICULOS_SUBVENCIONADOS, LITROS_SUBVENCION, MAX_CARGAS_PERIODO, VENTANA_HORAS_FRECUENCIA']
+  descripcion varchar(255) [not null]
+  tipo_combustible tipo_combustible [note: 'NULL = la regla aplica a todos los combustibles']
+  valor_numerico decimal(12,2) [not null, note: 'El valor de la regla: 2, 10, etc.']
+  vigente_desde timestamp [not null]
+  vigente_hasta timestamp [note: 'NULL = sin fecha de fin']
+  activa boolean [not null, default: true]
+
+  indexes {
+    (codigo, tipo_combustible, vigente_desde) [unique]
+  }
+}
+
+Table precio_combustible {
+  id_precio integer [pk, increment]
+  tipo_combustible tipo_combustible [not null]
+  tipo_precio tipo_precio [not null]
+  precio_unidad decimal(8,2) [not null, note: 'Precio por litro (o por m3 en el caso del gas)']
+  vigente_desde timestamp [not null]
+  vigente_hasta timestamp [note: 'NULL = precio vigente actualmente']
+
+  indexes {
+    (tipo_combustible, tipo_precio, vigente_desde) [unique]
+  }
+}
+
+// ---------- 4. SUBSIDIO ----------
+
+Table subvencion_vehiculo {
+  id_subvencion integer [pk, increment]
+  id_persona integer [not null, ref: > persona.id_persona, note: 'Titular del subsidio']
+  id_vehiculo integer [not null, ref: > vehiculo.id_vehiculo]
+  id_regla integer [ref: > regla_negocio.id_regla, note: 'Regla que fijo los litros asignados']
+  litros_asignados decimal(10,2) [not null]
+  litros_consumidos decimal(10,2) [not null, default: 0]
+  estado estado_subvencion [not null, default: 'VIGENTE']
+  fecha_asignacion timestamp [not null, default: `now()`]
+  fecha_agotamiento timestamp
+
+  indexes {
+    (id_persona, estado)
+    (id_vehiculo, estado)
+  }
+}
+
+// ---------- 5. GASOLINERAS ----------
+
+Table sucursal {
+  id_sucursal integer [pk, increment]
+  codigo_anh varchar(30) [not null, unique, note: 'Codigo de habilitacion otorgado por la ANH']
+  nombre varchar(120) [not null, note: 'Ej: Estacion Central Quillacollo']
+  empresa varchar(150) [not null, note: 'Razon social de la empresa duena de la estacion']
+  departamento varchar(30) [not null, note: 'Ej: Cochabamba, Santa Cruz, La Paz']
+  ciudad varchar(80) [not null, note: 'Ej: Cochabamba, Quillacollo, Sacaba']
+  direccion varchar(200)
+  latitud decimal(9,6) [not null, note: 'Para calcular distancias entre cargas (antifraude)']
+  longitud decimal(9,6) [not null]
+  activa boolean [not null, default: true]
+
+  indexes {
+    (departamento, ciudad)
+  }
+}
+
+Table surtidor {
+  id_surtidor integer [pk, increment]
+  id_sucursal integer [not null, ref: > sucursal.id_sucursal]
+  numero integer [not null, note: 'Numero de la bomba dentro de la estacion: 1, 2, 3...']
+  tipo_combustible tipo_combustible [not null, note: 'Combustible que despacha esta bomba']
+  activo boolean [not null, default: true]
+
+  indexes {
+    (id_sucursal, numero) [unique]
+  }
+}
+
+// ---------- 6. YPFB Y ANH ----------
+
+Table despacho_ypfb {
+  id_despacho integer [pk, increment]
+  id_sucursal integer [not null, ref: > sucursal.id_sucursal, note: 'Gasolinera que recibe el combustible']
+  tipo_combustible tipo_combustible [not null]
+  planta_origen varchar(100) [not null, note: 'Planta de YPFB de donde sale. Ej: Planta de almacenaje Senkata']
+  litros decimal(12,2) [not null, note: 'Litros entregados a la sucursal']
+  placa_cisterna varchar(10) [note: 'Placa del camion cisterna que transporta el combustible']
+  fecha_hora timestamp [not null, note: 'Cuando se entrego el combustible']
+
+  indexes {
+    (id_sucursal, fecha_hora)
+  }
+}
+
+Table inspeccion_anh {
+  id_inspeccion integer [pk, increment]
+  id_sucursal integer [not null, ref: > sucursal.id_sucursal, note: 'Gasolinera inspeccionada']
+  inspector varchar(100) [not null, note: 'Nombre del funcionario de la ANH que inspecciono']
+  fecha_hora timestamp [not null, note: 'Cuando se hizo la inspeccion']
+  resultado resultado_inspeccion [not null]
+  observaciones text [note: 'Detalle de lo encontrado: surtidor alterado, combustible fuera de especificacion, etc.']
+
+  indexes {
+    (id_sucursal, fecha_hora)
+  }
+}
+
+// ---------- 7. CARGAS ----------
+
+Table transaccion_carga {
+  id_transaccion bigint [pk, increment]
+  id_surtidor integer [not null, ref: > surtidor.id_surtidor]
+  id_persona integer [not null, ref: > persona.id_persona, note: 'Quien se identifico con la huella']
+  id_huella integer [not null, ref: > huella_digital.id_huella]
+  id_vehiculo integer [ref: > vehiculo.id_vehiculo, note: 'Vacio cuando la carga es en bidon']
+  id_subvencion integer [ref: > subvencion_vehiculo.id_subvencion, note: 'Solo si se aplico subsidio']
+  tipo_carga tipo_carga [not null, default: 'VEHICULO']
+  litros_total decimal(8,2) [not null]
+  litros_subvencionados decimal(8,2) [not null, default: 0]
+  litros_internacionales decimal(8,2) [not null, default: 0]
+  precio_subvencionado decimal(8,2) [note: 'Precio aplicado a los litros subvencionados']
+  precio_internacional decimal(8,2) [note: 'Precio aplicado a los litros internacionales']
+  monto_total decimal(10,2) [not null]
+  tanque_lleno boolean [not null, default: false, note: 'Permite calcular en cuanto tiempo se acaba un tanque lleno']
+  motivo_precio_internacional motivo_precio_internacional [note: 'Por que se cobro internacional (total o parcialmente)']
+  estado estado_transaccion [not null, default: 'APROBADA']
+  fecha_hora timestamp [not null, default: `now()`]
+  latitud decimal(9,6)
+  longitud decimal(9,6)
+
+  indexes {
+    (id_vehiculo, fecha_hora)
+    (id_persona, fecha_hora)
+    (id_surtidor, fecha_hora)
+  }
+}
+
+Table carga_bidon {
+  id_carga_bidon bigint [pk, increment]
+  id_transaccion bigint [not null, ref: > transaccion_carga.id_transaccion]
+  capacidad_bidon_litros decimal(6,2) [not null, note: 'Tamano del bidon: 10, 20, etc.']
+  cantidad_bidones integer [not null, default: 1]
+  litros_cargados decimal(8,2) [not null, note: 'Litros realmente cargados en esos bidones']
+  uso_declarado varchar(100) [note: 'Ej: generador, maquinaria, agricola']
+}
+
+// ---------- 8. CONTROL ----------
+
+Table alerta_fraude {
+  id_alerta bigint [pk, increment]
+  id_transaccion bigint [not null, ref: > transaccion_carga.id_transaccion]
+  id_regla integer [ref: > regla_negocio.id_regla, note: 'Regla que se rompio']
+  tipo_alerta tipo_alerta [not null]
+  descripcion varchar(255)
+  distancia_km decimal(8,2) [note: 'Solo para UBICACION_IMPOSIBLE']
+  tiempo_transcurrido_min integer [note: 'Minutos entre las dos cargas']
+  estado estado_alerta [not null, default: 'ABIERTA']
+  fecha_alerta timestamp [not null, default: `now()`]
+  fecha_revision timestamp [note: 'Cuando la ANH reviso la alerta']
+
+  indexes {
+    (estado, fecha_alerta)
+  }
+}
